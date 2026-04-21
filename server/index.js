@@ -4,9 +4,10 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const dotenv = require("dotenv");
 const helmet = require("helmet");
+const mongoose = require("mongoose");
 const connectDB = require("./config/db");
 const { initSocket } = require("./config/socket-io");
-const setupRedis = require("./config/redis");
+const { apiLimiter } = require("./middleware/rate-limiter");
 const apiRoutes = require("./routes");
 
 dotenv.config();
@@ -14,6 +15,7 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
+// Connect to Database
 connectDB();
 
 const PORT = process.env.PORT || 5000;
@@ -29,6 +31,18 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+// Health Check Endpoint (before rate limiting to allow monitoring)
+app.get("/api/health", (req, res) => {
+	res.status(200).json({
+		status: "UP",
+		timestamp: new Date().toISOString(),
+		uptime: process.uptime(),
+	});
+});
+
+// Apply rate limiting to all API routes
+app.use("/api", apiLimiter);
 app.use("/api", apiRoutes);
 
 // 404 Handler
@@ -60,9 +74,29 @@ process.on("unhandledRejection", (reason, promise) => {
 
 process.on("uncaughtException", (err) => {
 	console.error("❌ Uncaught Exception:", err);
-	// Exit the process as it's in an unclean state
 	process.exit(1);
 });
+
+// Graceful Shutdown Handler
+const gracefulShutdown = (signal) => {
+	console.log(`\n释放 ${signal} signal received. Shutting down gracefully...`);
+	server.close(() => {
+		console.log("HTTP server closed.");
+		mongoose.connection.close(false).then(() => {
+			console.log("MongoDB connection closed.");
+			process.exit(0);
+		});
+	});
+
+	// Force close after 10s
+	setTimeout(() => {
+		console.error("Could not close connections in time, forcefully shutting down");
+		process.exit(1);
+	}, 10000);
+};
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 server.on("error", (err) => {
 	console.error("❌ Server Error:", err);

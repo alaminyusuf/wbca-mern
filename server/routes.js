@@ -1,33 +1,32 @@
 const { Router } = require('express')
 const bcrypt = require('bcrypt')
 const jwt = require('jsonwebtoken')
+const { z } = require('zod')
+const { authLimiter } = require('./middleware/rate-limiter')
 const User = require('./models/User')
 
 const router = Router()
 
-// Validation helper
-const validateInput = (username, password) => {
-	if (
-		!username ||
-		typeof username !== 'string' ||
-		username.trim().length === 0
-	) {
-		return 'Username is required and must be a non-empty string'
-	}
-	if (!password || typeof password !== 'string' || password.length < 6) {
-		return 'Password is required and must be at least 6 characters'
-	}
-	return null
-}
+// User Input Validation Schema
+const userSchema = z.object({
+	username: z.string().min(1, 'Username is required').trim(),
+	password: z.string().min(6, 'Password must be at least 6 characters'),
+})
+
+// Apply stricter rate limiting to auth routes
+router.use('/login', authLimiter)
+router.use('/signup', authLimiter)
 
 router.post('/login', async (req, res) => {
 	try {
 		const { username, password } = req.body
 
-		// Validate input
-		const error = validateInput(username, password)
-		if (error) {
-			return res.status(400).json({ error })
+		// Validate input with Zod
+		const validation = userSchema.safeParse({ username, password })
+		if (!validation.success) {
+			return res.status(400).json({
+				error: validation.error.errors[0].message,
+			})
 		}
 
 		// Check if user exists
@@ -82,10 +81,12 @@ router.post('/signup', async (req, res) => {
 	try {
 		const { username, password } = req.body
 
-		// Validate input
-		const error = validateInput(username, password)
-		if (error) {
-			return res.status(400).json({ error })
+		// Validate input with Zod
+		const validation = userSchema.safeParse({ username, password })
+		if (!validation.success) {
+			return res.status(400).json({
+				error: validation.error.errors[0].message,
+			})
 		}
 
 		const found = await User.findOne({ username: username })
